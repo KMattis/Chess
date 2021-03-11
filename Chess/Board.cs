@@ -7,7 +7,7 @@ namespace Chess
 
     public class BoardState
     {
-        public uint positionKey;
+        public ulong positionKey;
 
         public int enPassentSquare;
 
@@ -33,9 +33,7 @@ namespace Chess
 
         public IList<int>[] pieceList = new List<int>[32];
 
-        private MoveGenerator generator;
-
-        public uint positionKey;
+        public ulong positionKey;
 
         public uint Us;
         public uint Them;
@@ -50,8 +48,6 @@ namespace Chess
             {
                 pieceList[pieceType] = new List<int>();
             }
-
-            generator = new MoveGenerator(this);
 
             var fenData = fen.Split(' ');
             var rankDataArray = fenData[0].Split('/');
@@ -109,7 +105,7 @@ namespace Chess
 
             Us = Them;
             Them = Piece.OtherColor(Us);
-            positionKey = ComputePositionKey();
+            positionKey = ZobristKey.GetKey(this);
         }
 
         public void UndoNullMove()
@@ -234,7 +230,7 @@ namespace Chess
 
             Us = Them;
             Them = Piece.OtherColor(Us);
-            positionKey = ComputePositionKey();
+            positionKey = ZobristKey.GetKey(this);
         }
 
         public void UndoMove()
@@ -318,27 +314,6 @@ namespace Chess
                 {
                     throw new Exception("Too much of type " + pieceType);
                 }
-            }
-        }
-
-        private uint ComputePositionKey()
-        {
-            unchecked
-            {
-                const int p = 16777619;
-                uint hash = 2166136261;
-
-                for (int i = 0; i < 64; i++)
-                    hash = (hash ^ board[i]) * p;
-
-                hash += hash << 13;
-                hash ^= hash >> 7;
-                hash += hash << 3;
-                hash ^= hash >> 17;
-                hash += hash << 5;
-
-                hash += Us;
-                return hash;
             }
         }
 

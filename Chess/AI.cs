@@ -6,87 +6,20 @@ using System.Text;
 
 namespace Chess
 {
-    /*
-    public class EvalScore
+    public class SearchInfo
     {
-        public static readonly EvalScore DRAW = new EvalScore(0);
-        public int Score { get; private set; }
-        public bool IsForcedMate { get; private set; } = false;
-        public int ForcedMateIn { get; private set; } = -1;
-
-        public EvalScore (int score, int forcedMateIn = -1)
-        {
-            Score = score;
-            if(forcedMateIn >= 0)
-            {
-                IsForcedMate = true;
-                ForcedMateIn = forcedMateIn;
-            }
-        }
-
-        public EvalScore Negate()
-        {
-            return new EvalScore(-Score, ForcedMateIn);
-        }
-
-        public EvalScore Increment()
-        {
-            return IsForcedMate ? new EvalScore(Score, ForcedMateIn + 1) : this;
-        }
-
-        public int Compare(EvalScore e2)
-        {
-            if(Score == e2.Score)
-            {
-                if (e2.IsForcedMate)
-                {
-                    if (IsForcedMate)
-                    {
-                        return ForcedMateIn == e2.ForcedMateIn ? 0 : (ForcedMateIn > e2.ForcedMateIn ? 1 : -1);
-                    }
-                    else
-                    {
-                        return -1;
-                    }
-                }
-                else
-                {
-                    return 0;
-                }
-            }
-            else
-            {
-                return Score > e2.Score ? 1 : -1;
-            }
-        }
-
-        public override string ToString()
-        {
-            if (IsForcedMate)
-            {
-                var sign = Score > 0 ? "" : "-";
-                return $"{sign}M{(ForcedMateIn+1) / 2}";
-            }
-            else
-            {
-                return Math.Round(Score / 100m, 2).ToString(CultureInfo.InvariantCulture);
-            }
-        }
-
-        public string ToUciString()
-        {
-            if (IsForcedMate)
-            {
-                var sign = Score > 0 ? "" : "-";
-                return $"mate {sign}{(ForcedMateIn + 1) / 2}";
-            }
-            else
-            {
-                return $"cp {Score}";
-            }
-        }
+        public int Depth { get; set; }
+        public int Score { get; set; }
+        public Move[] PV { get; set; }
+        public int Nodes { get; set; }
+        public int NullMoves { get; set; }
+        public int NullMovesSuccess { get; set; }
+        public int BetaCutoffs { get; set; }
+        public int QNodes { get; set; }
+        public int FutilityPrunes { get; set; }
+    
+        public int Transpositions { get; set; }
     }
-    */
 
     public class AI
     {
@@ -100,11 +33,10 @@ namespace Chess
         private Board board;
         private MoveGenerator generator;
 
-        public int Nodes = 0;
-        private IDictionary<uint, int> transpositions = new Dictionary<uint, int>();
+        private IDictionary<ulong, int> transpositions = new Dictionary<ulong, int>();
+        private SearchInfo searchInfo;
 
         Move[] lastpv;
-        int searchDepth = 0;
         private Move[][] KillerMoves;
 
         public AI(Board board)
@@ -133,7 +65,7 @@ namespace Chess
 
         private int MoveImportance(Move move, int depth)
         {
-            var pvMove = lastpv == null ? null : searchDepth - depth >= lastpv.Length ? null : depth < 0 ? null : lastpv[searchDepth - depth];
+            var pvMove = lastpv == null ? null : searchInfo.Depth - depth >= lastpv.Length ? null : depth < 0 ? null : lastpv[searchInfo.Depth - depth];
             var pvValue = pvMove == null ? 0 : (pvMove.Start == move.Start && pvMove.Target == move.Target) ? 10000000 : 0;
 
             var killerValue = GetKillerMoveValue(move);
@@ -146,27 +78,32 @@ namespace Chess
             return killerValue + pvValue + captureValue + promotionValue + pawnCapturePenalty;
         }
 
-        public (int, Move[]) FindBestMove(int depth, Move[] lastpv, int startAlpha, int startBeta)
+        public SearchInfo FindBestMove(int depth, Move[] lastpv, int startAlpha, int startBeta)
         {
-            Nodes = 0;
             transpositions.Clear();
             var pv = new Move[depth];
 
             this.lastpv = lastpv;
-            this.searchDepth = depth;
+            this.searchInfo = new SearchInfo
+            {
+                Depth = depth
+            };
 
             var score = DeepEval(depth, startAlpha, startBeta, false, pv);
-            return (score, pv);
+            searchInfo.Score = score;
+            searchInfo.PV = pv;
+            return searchInfo;
         }
 
         private int DeepEval(int depth, int alpha, int beta, bool nullMoveAllowed, Move[] pv)
         {
-            Nodes++;
+            searchInfo.Nodes++;
 
-            //if (transpositions.ContainsKey(board.positionKey))
-            //{
-            //    return (transpositions[board.positionKey], null);
-            //}
+            if (transpositions.ContainsKey(board.positionKey))
+            {
+                searchInfo.Transpositions++;
+                return transpositions[board.positionKey]; //TODO might only be a upper/lower bound
+            }
 
             generator.Setup();
             var moves = generator.GetMoves(false);
@@ -200,6 +137,7 @@ namespace Chess
                 var currentEval = Evaluation.Evaluate(board);
                 if(currentEval + Evaluation.BishopValue < alpha)
                 {
+                    searchInfo.FutilityPrunes++;
                     //Prune this node, i.e. go directly to QuiesceneSearch
                     return QuiesceneSearch(alpha, beta);
                 }
@@ -207,6 +145,7 @@ namespace Chess
 
             if(nullMoveAllowed && !generator.InCheck && depth >= 1 + R)
             {
+                searchInfo.NullMoves++;
                 //Null move pruning
                 var npv = new Move[depth]; //irellevant here
                 board.SubmitNullMove();
@@ -214,6 +153,7 @@ namespace Chess
                 board.UndoNullMove();
                 if (eval >= beta)
                 {
+                    searchInfo.NullMovesSuccess++;
                     return eval;
                 }
             }
@@ -221,7 +161,7 @@ namespace Chess
             int movenumber = 1;
             foreach (var move in moves.OrderByDescending(m => MoveImportance(m, depth)))
             {
-                if (depth == searchDepth) //Upper level
+                if (depth == searchInfo.Depth) //Upper level
                     Console.WriteLine($"info currmove {move.ToAlgebraicNotation()} currmovenumber {movenumber++}");
 
                 var npv = new Move[depth-1];
@@ -233,6 +173,7 @@ namespace Chess
 
                 if (eval >= beta)
                 {
+                    searchInfo.BetaCutoffs++;
                     if (move.CapturedPiece == Piece.NONE)
                     {
                         KillerMoves[board.Ply][2] = KillerMoves[board.Ply][1];
@@ -255,11 +196,13 @@ namespace Chess
 
         private int QuiesceneSearch(int alpha, int beta)
         {
-            Nodes++;
+            searchInfo.Nodes++;
+            searchInfo.QNodes++;
 
             int currentEval = Evaluation.Evaluate(board);
             if(currentEval >= beta)
             {
+                searchInfo.BetaCutoffs++;
                 return beta;
             }
             if(currentEval > alpha)
@@ -276,7 +219,10 @@ namespace Chess
                 board.UndoMove();
 
                 if (eval >= beta)
+                {
+                    searchInfo.BetaCutoffs++;
                     return beta;
+                }
 
                 if(eval > alpha)
                 {

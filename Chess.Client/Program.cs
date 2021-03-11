@@ -95,40 +95,41 @@ namespace Chess.Client
                 int alpha = lastScore.HasValue ? lastScore.Value - 20 : -AI.INFINITY;
                 int beta = lastScore.HasValue ? lastScore.Value + 20 : AI.INFINITY;
 
-                (int score, Move[] pv) = ai.FindBestMove(depth, lastpv, alpha, beta);
+                SearchInfo info = ai.FindBestMove(depth, lastpv, alpha, beta);
                 var pvstring = "";
-                foreach (var move in pv)
+                foreach (var move in info.PV)
                 {
                     if (move == null)
                         break;
                     pvstring += move.ToAlgebraicNotation() + " ";
                 }
-                var nodesPerSecond = (int)(ai.Nodes / (DateTime.Now - currentSearchStartTime).TotalSeconds);
+                var nodesPerSecond = (int)(info.Nodes / (DateTime.Now - currentSearchStartTime).TotalSeconds);
 
-                if (score <= alpha || score >= beta)
+                if (info.Score <= alpha || info.Score >= beta)
                 {
                     
-                    Console.WriteLine($"info score cp {score} pv {pvstring} depth {depth} nodes {ai.Nodes} nps {nodesPerSecond}");
+                    Console.WriteLine($"info score cp {info.Score} pv {pvstring} depth {info.Depth} nodes {info.Nodes} nps {nodesPerSecond}");
                     currentSearchStartTime = DateTime.Now;
-                    (score, pv) = ai.FindBestMove(depth, lastpv, -AI.INFINITY, AI.INFINITY);
+                    info = ai.FindBestMove(depth, lastpv, -AI.INFINITY, AI.INFINITY);
                     pvstring = "";
-                    foreach (var move in pv)
+                    foreach (var move in info.PV)
                     {
                         if (move == null)
                             break;
                         pvstring += move.ToAlgebraicNotation() + " ";
                     }
-                    nodesPerSecond = (int)(ai.Nodes / (DateTime.Now - currentSearchStartTime).TotalSeconds);
+                    nodesPerSecond = (int)(info.Nodes / (DateTime.Now - currentSearchStartTime).TotalSeconds);
                 }
                 
                 //TODO: Add mating score info
-                Console.WriteLine($"info score cp {score} pv {pvstring} depth {depth} nodes {ai.Nodes} nps {nodesPerSecond}");
+                Console.WriteLine($"info score cp {info.Score} pv {pvstring} depth {info.Depth} nodes {info.Nodes} nps {nodesPerSecond}");
+                Console.WriteLine($"info string NM {info.NullMoves} NMS {info.NullMovesSuccess} QNodes {info.QNodes} BCutoffs {info.BetaCutoffs} FP {info.FutilityPrunes} TTHits {info.Transpositions}");
                 if (DateTime.Now - startTime > TimeSpan.FromSeconds(10))
                 {
-                    return pv[0];
+                    return info.PV[0];
                 }
-                lastpv = pv;
-                lastScore = score;
+                lastpv = info.PV;
+                lastScore = info.Score;
                 depth++;
             }
         }
