@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 
 namespace Chess.Client
@@ -89,13 +90,14 @@ namespace Chess.Client
             int depth = 5;
             Move[] lastpv = null;
             int? lastScore = null;
+            IDictionary<Move, int> topLevelMoveOrder = null;
             while (true)
             {
                 var currentSearchStartTime = DateTime.Now;
                 int alpha = lastScore.HasValue ? lastScore.Value - 20 : -AI.INFINITY;
                 int beta = lastScore.HasValue ? lastScore.Value + 20 : AI.INFINITY;
 
-                SearchInfo info = ai.FindBestMove(depth, lastpv, alpha, beta);
+                SearchInfo info = ai.FindBestMove(depth, lastpv, alpha, beta, topLevelMoveOrder);
                 var pvstring = "";
                 foreach (var move in info.PV)
                 {
@@ -110,7 +112,7 @@ namespace Chess.Client
                     
                     Console.WriteLine($"info score cp {info.Score} pv {pvstring} depth {info.Depth} nodes {info.Nodes} nps {nodesPerSecond}");
                     currentSearchStartTime = DateTime.Now;
-                    info = ai.FindBestMove(depth, lastpv, -AI.INFINITY, AI.INFINITY);
+                    info = ai.FindBestMove(depth, lastpv, -AI.INFINITY, AI.INFINITY, topLevelMoveOrder);
                     pvstring = "";
                     foreach (var move in info.PV)
                     {
@@ -130,6 +132,7 @@ namespace Chess.Client
                 }
                 lastpv = info.PV;
                 lastScore = info.Score;
+                topLevelMoveOrder = info.TopLevelMoveOrder;
                 depth++;
             }
         }

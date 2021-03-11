@@ -7,10 +7,10 @@ namespace Chess
     public static class Evaluation
     {
         public const int PawnValue = 100;
-        public const int KnightValue = 300;
-        public const int BishopValue = 300;
-        public const int RookValue = 500;
-        public const int QueenValue = 900;
+        public const int KnightValue = 325;
+        public const int BishopValue = 325;
+        public const int RookValue = 550;
+        public const int QueenValue = 1000;
 
         public static int[] PawnPositionTable =
         {
@@ -88,11 +88,11 @@ namespace Chess
         public static int[] PieceValues = new int[32];
         public static int[] PieceValues_ColorIndependent = new int[32];
 
-        public static int BishopPairScore = 30;
+        public static int BishopPairScore = 35;
 
         //[isOpenSelf][isOpenOpponent] (0 = isOpen, 1 = isClosed)
         public static int[][] RookFileScores = { new int[]{ 25, 15 }, new int[]{ 5, -10 } };
-        public static int DoubledRookBonus = 20;
+        public static int DoubledRookBonus = 30;
 
         public static int IsolatedPawnBonus = -20;
         public static int[] PassedPawnBonus = new int[] { 0, 22, 33, 44, 55, 77, 88, 0 }; //Per rank

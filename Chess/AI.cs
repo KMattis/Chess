@@ -19,6 +19,22 @@ namespace Chess
         public int FutilityPrunes { get; set; }
     
         public int Transpositions { get; set; }
+
+        public IDictionary<Move, int> TopLevelMoveOrder { get; set; } = new Dictionary<Move, int>();
+    }
+
+    public enum TranspositionEntryType
+    {
+        Exact,
+        UpperBound,
+        LowerBound
+    }
+
+    //TODO Safe pv in TT
+    public class TranspositionEntry
+    {
+        public int Score;
+        public TranspositionEntryType Type;
     }
 
     public class AI
@@ -28,12 +44,14 @@ namespace Chess
         public const int CHECKMATE_TRESHOLD = CHECKMATE - 1000;
         public const int DRAW = 0;
 
+        public const int LookupFailed = int.MinValue;
+
         public const int R = 2;
 
         private Board board;
         private MoveGenerator generator;
 
-        private IDictionary<ulong, int> transpositions = new Dictionary<ulong, int>();
+        private IDictionary<ulong, TranspositionEntry> transpositions = new Dictionary<ulong, TranspositionEntry>();
         private SearchInfo searchInfo;
 
         Move[] lastpv;
@@ -63,8 +81,11 @@ namespace Chess
             return 0;
         }
 
-        private int MoveImportance(Move move, int depth)
+        private int MoveImportance(Move move, int depth, IDictionary<Move, int> ordering)
         {
+            if (ordering != null && ordering.ContainsKey(move))
+                return ordering[move];
+
             var pvMove = lastpv == null ? null : searchInfo.Depth - depth >= lastpv.Length ? null : depth < 0 ? null : lastpv[searchInfo.Depth - depth];
             var pvValue = pvMove == null ? 0 : (pvMove.Start == move.Start && pvMove.Target == move.Target) ? 10000000 : 0;
 
@@ -78,7 +99,7 @@ namespace Chess
             return killerValue + pvValue + captureValue + promotionValue + pawnCapturePenalty;
         }
 
-        public SearchInfo FindBestMove(int depth, Move[] lastpv, int startAlpha, int startBeta)
+        public SearchInfo FindBestMove(int depth, Move[] lastpv, int startAlpha, int startBeta, IDictionary<Move, int> lastTopLevelMoveOrder)
         {
             transpositions.Clear();
             var pv = new Move[depth];
@@ -89,20 +110,54 @@ namespace Chess
                 Depth = depth
             };
 
-            var score = DeepEval(depth, startAlpha, startBeta, false, pv);
+            var score = DeepEval(depth, startAlpha, startBeta, false, pv, lastTopLevelMoveOrder);
             searchInfo.Score = score;
             searchInfo.PV = pv;
             return searchInfo;
         }
 
-        private int DeepEval(int depth, int alpha, int beta, bool nullMoveAllowed, Move[] pv)
+        private int LookupEvaluation(int alpha, int beta)
+        {
+            //TODO account for depth
+
+            var transposition = transpositions[board.positionKey];
+            if (transposition.Type == TranspositionEntryType.Exact)
+            {
+                return transposition.Score;
+            }
+            if (transposition.Type == TranspositionEntryType.UpperBound && transposition.Score <= alpha)
+            {
+                return transposition.Score;
+            }
+            if (transposition.Type == TranspositionEntryType.LowerBound && transposition.Score >= beta)
+            {
+                return transposition.Score;
+            }
+
+            return LookupFailed;
+        }
+
+        private void StoreEvaluation(int score, TranspositionEntryType type)
+        {
+            if (!transpositions.ContainsKey(board.positionKey))
+                transpositions.Add(board.positionKey, new TranspositionEntry { Score = score, Type = type });
+            else if(type == TranspositionEntryType.Exact) //We have a better evaluation
+            {
+                transpositions[board.positionKey] = new TranspositionEntry { Score = score, Type = type };
+            }
+        }
+
+        private int DeepEval(int depth, int alpha, int beta, bool nullMoveAllowed, Move[] pv, IDictionary<Move, int> orderedTopLevelMoves = null)
         {
             searchInfo.Nodes++;
 
             if (transpositions.ContainsKey(board.positionKey))
             {
                 searchInfo.Transpositions++;
-                return transpositions[board.positionKey]; //TODO might only be a upper/lower bound
+                var score = LookupEvaluation(alpha, beta);
+
+                if (score != LookupFailed)
+                    return score;
             }
 
             generator.Setup();
@@ -129,7 +184,9 @@ namespace Chess
             //TODO Add 50 moves rule
 
             if (depth == 0)
+            {
                 return QuiesceneSearch(alpha, beta);
+            }
 
             if(depth == 1)
             {
@@ -158,22 +215,31 @@ namespace Chess
                 }
             }
 
+            TranspositionEntryType ttType = TranspositionEntryType.UpperBound;
             int movenumber = 1;
-            foreach (var move in moves.OrderByDescending(m => MoveImportance(m, depth)))
+            
+            foreach (var move in moves.OrderByDescending(m => MoveImportance(m, depth, orderedTopLevelMoves)))
             {
                 if (depth == searchInfo.Depth) //Upper level
-                    Console.WriteLine($"info currmove {move.ToAlgebraicNotation()} currmovenumber {movenumber++}");
+                {
+                    Console.WriteLine($"info currmove {move.ToAlgebraicNotation()} currmovenumber {movenumber++} depth {depth}");
+                }
 
                 var npv = new Move[depth-1];
                 board.SubmitMove(move);
                 var eval = -DeepEval(depth - 1, -beta, -alpha, true, npv);
-                if(!transpositions.ContainsKey(board.positionKey))
-                    transpositions.Add(board.positionKey, eval);
                 board.UndoMove();
+
+                if(depth == searchInfo.Depth)
+                {
+                    searchInfo.TopLevelMoveOrder.Add(move, eval);
+                }
 
                 if (eval >= beta)
                 {
                     searchInfo.BetaCutoffs++;
+                    //transposition is an upper bound
+                    StoreEvaluation(eval, TranspositionEntryType.LowerBound);
                     if (move.CapturedPiece == Piece.NONE)
                     {
                         KillerMoves[board.Ply][2] = KillerMoves[board.Ply][1];
@@ -182,14 +248,16 @@ namespace Chess
                     }
                     return beta;
                 }
-
-                if (eval > alpha)
+                else if (eval > alpha)
                 {
                     alpha = eval;
                     pv[0] = move;
                     Array.Copy(npv, 0, pv, 1, npv.Length);
+                    ttType = TranspositionEntryType.Exact;
                 }
             }
+
+            StoreEvaluation(alpha, ttType);
 
             return alpha;
         }
@@ -212,7 +280,7 @@ namespace Chess
 
             generator.Setup();
             var moves = generator.GetMoves(true);
-            foreach (var move in moves.OrderByDescending(m => MoveImportance(m, -1)))
+            foreach (var move in moves.OrderByDescending(m => MoveImportance(m, -1, null)))
             {
                 board.SubmitMove(move);
                 var eval = -QuiesceneSearch(-beta, -alpha);
