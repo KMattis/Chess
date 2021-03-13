@@ -22,6 +22,10 @@ namespace Chess
         public ulong opponentKingAttackMap;
         public ulong opponentAttackMap;
 
+        private ulong freeSquares;
+        private ulong enemyPieces;
+        private ulong friendlyPieces;
+
         private int ourKingSquare;
 
         public bool InCheck;
@@ -95,13 +99,7 @@ namespace Chess
                 AddKnightMoves(moves, knights[i], onlyCaptures);
             }
 
-            AddPawnMovesNoCaptures(moves);
-
-            var pawns = board.pieceList[Piece.PAWN | board.Us];
-            for (int i = 0; i < pawns.Count; i++)
-            {
-                AddPawnMoves(moves, pawns[i], onlyCaptures);
-            }
+            AddPawnMoves(moves, onlyCaptures);
 
             return moves;
         }
@@ -133,55 +131,90 @@ namespace Chess
                 }
             }
         }
-
-        bool IsMovingAlongRay(int rayDir, int startSquare, int targetSquare)
+        private bool IsMovingAlongRay(int rayDir, int startSquare, int targetSquare)
         {
             int moveDir = DirectionLookup[targetSquare - startSquare + 63];
             return (rayDir == moveDir || -rayDir == moveDir);
         }
 
-
-        private void AddPawnMovesNoCaptures(IList<Move> moves)
+        private void AddPawnMoves(IList<Move> moves, bool onlyCaptures)
         {
             var pawnDirection = board.Us == Piece.WHITE ? Directions[N] : Directions[S];
             var promotionRank = board.Us == Piece.WHITE ? 7 : 0;
-
-            ulong allPieces = board.BlackPawnBitboard | board.WhitePawnBitboard | board.BlackPiecesBitboard | board.WhitePiecesBitboard;
 
             //one square moves
             var ourPawnsBitboard = board.Us == Piece.WHITE ? board.WhitePawnBitboard : board.BlackPawnBitboard;
 
             var pinnedPawns = pinBitmask & ourPawnsBitboard;
 
-            //Shift the pawn positions one up 
-            var pseudoLegalSinglePawnMoveTargets = board.Us == Piece.WHITE ? BitboardUtilities.ShiftUp(ourPawnsBitboard) : BitboardUtilities.ShiftDown(ourPawnsBitboard);
-
-            //check if there are blocking pieces
-            pseudoLegalSinglePawnMoveTargets &= ~allPieces;
-
-            var legalSinglePawnMoveTarget = pseudoLegalSinglePawnMoveTargets;
-            if (InCheck)
+            if (!onlyCaptures)
             {
-                //target suqare must be a ray check square
-                legalSinglePawnMoveTarget &= rayCheckBitmask;
-            }
+                var pseudoLegalSinglePawnMoveTargets = board.Us == Piece.WHITE ? BitboardUtilities.ShiftUp(ourPawnsBitboard) : BitboardUtilities.ShiftDown(ourPawnsBitboard);
+                pseudoLegalSinglePawnMoveTargets &= freeSquares;
+                var legalSinglePawnMoveTarget = pseudoLegalSinglePawnMoveTargets & rayCheckBitmask;
 
-            while (legalSinglePawnMoveTarget != 0)
-            {
-                var targetSquare = BitOperations.TrailingZeroCount(legalSinglePawnMoveTarget);
-                var startSquare = targetSquare - pawnDirection;
-
-                legalSinglePawnMoveTarget ^= 1ul << targetSquare;
-
-                if((pinnedPawns & (1ul << startSquare)) != 0)
+                while (legalSinglePawnMoveTarget != 0)
                 {
-                    if (!IsMovingAlongRay(pawnDirection, startSquare, ourKingSquare))
+                    var targetSquare = BitOperations.TrailingZeroCount(legalSinglePawnMoveTarget);
+                    var startSquare = targetSquare - pawnDirection;
+                    legalSinglePawnMoveTarget ^= 1ul << targetSquare;
+                    if ((pinnedPawns & (1ul << startSquare)) != 0 && !IsMovingAlongRay(pawnDirection, startSquare, ourKingSquare))
                     {
                         continue;
                     }
+                    if (targetSquare / 8 == promotionRank)
+                    {
+                        moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.QUEEN));
+                        moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.ROOK));
+                        moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.BISHOP));
+                        moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.KNIGHT));
+                    }
+                    else
+                    {
+                        moves.Add(new Move(startSquare, targetSquare, board));
+                    }
                 }
 
-                if(targetSquare / 8 == promotionRank)
+                var doublePawnMoveTarget = board.Us == Piece.WHITE ? BitboardUtilities.ShiftUp(pseudoLegalSinglePawnMoveTargets) : BitboardUtilities.ShiftDown(pseudoLegalSinglePawnMoveTargets);
+                doublePawnMoveTarget &= RankBitboards[board.Us == Piece.WHITE ? 3 : 4] & freeSquares & rayCheckBitmask;
+
+                while (doublePawnMoveTarget != 0)
+                {
+                    var targetSquare = BitOperations.TrailingZeroCount(doublePawnMoveTarget);
+                    var startSquare = targetSquare - 2 * pawnDirection;
+
+                    doublePawnMoveTarget ^= 1ul << targetSquare;
+
+                    if ((pinnedPawns & (1ul << startSquare)) != 0)
+                    {
+                        if (!IsMovingAlongRay(pawnDirection, startSquare, ourKingSquare))
+                        {
+                            continue;
+                        }
+                    }
+                    moves.Add(new Move(startSquare, targetSquare, board).DoublePawnMove());
+                }
+            }
+
+            //Captures
+            var upWest = Directions[board.Us == Piece.WHITE ? NW : SW];
+            var upEast = Directions[board.Us == Piece.WHITE ? NE : SE];
+            var enemyPiecesAndEnPassent = board.EnPassentSquare >= 0 ? enemyPieces | (1ul << board.EnPassentSquare) : enemyPieces;
+            var captureUpWestTargets = board.Us == Piece.WHITE ? BitboardUtilities.ShiftUpLeft(ourPawnsBitboard) : BitboardUtilities.ShiftDownLeft(ourPawnsBitboard);
+            captureUpWestTargets &= enemyPiecesAndEnPassent & rayCheckBitmask;
+            var captureUpEastTargets = board.Us == Piece.WHITE ? BitboardUtilities.ShiftUpRight(ourPawnsBitboard) : BitboardUtilities.ShiftDownRight(ourPawnsBitboard);
+            captureUpEastTargets &= enemyPiecesAndEnPassent & rayCheckBitmask;
+
+            while(captureUpWestTargets != 0)
+            {
+                var targetSquare = BitOperations.TrailingZeroCount(captureUpWestTargets);
+                var startSquare = targetSquare - upWest;
+                captureUpWestTargets ^= 1ul << targetSquare;
+                if ((pinnedPawns & (1ul << startSquare)) != 0 && !IsMovingAlongRay(upWest, startSquare, ourKingSquare))
+                {
+                    continue;
+                }
+                if (targetSquare / 8 == promotionRank)
                 {
                     moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.QUEEN));
                     moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.ROOK));
@@ -190,119 +223,38 @@ namespace Chess
                 }
                 else
                 {
-                    moves.Add(new Move(startSquare, targetSquare, board));
+                    var move = new Move(startSquare, targetSquare, board);
+                    if (targetSquare == board.EnPassentSquare)
+                        move.EnPassent();
+                    moves.Add(move);
                 }
             }
 
-            var doublePawnMoveTarget = board.Us == Piece.WHITE ? BitboardUtilities.ShiftUp(pseudoLegalSinglePawnMoveTargets) : BitboardUtilities.ShiftDown(pseudoLegalSinglePawnMoveTargets);
-            doublePawnMoveTarget &= RankBitboards[board.Us == Piece.WHITE ? 3 : 4];
-            doublePawnMoveTarget &= ~allPieces;
-            if (InCheck)
+            while (captureUpEastTargets != 0)
             {
-                //target square must be a ray check square
-                doublePawnMoveTarget &= rayCheckBitmask;
-            }
-
-            while (doublePawnMoveTarget != 0)
-            {
-                var targetSquare = BitOperations.TrailingZeroCount(doublePawnMoveTarget);
-                var startSquare = targetSquare - 2*pawnDirection;
-
-                doublePawnMoveTarget ^= 1ul << targetSquare;
-
-                if ((pinnedPawns & (1ul << startSquare)) != 0)
+                var targetSquare = BitOperations.TrailingZeroCount(captureUpEastTargets);
+                var startSquare = targetSquare - upEast;
+                captureUpEastTargets ^= 1ul << targetSquare;
+                if ((pinnedPawns & (1ul << startSquare)) != 0 && !IsMovingAlongRay(upEast, startSquare, ourKingSquare))
                 {
-                    if (!IsMovingAlongRay(pawnDirection, startSquare, ourKingSquare))
-                    {
-                        continue;
-                    }
-                }
-
-                moves.Add(new Move(startSquare, targetSquare, board).DoublePawnMove());
-            }
-        }
-
-        private void AddPawnMoves(IList<Move> moves, int start, bool onlyCaptures)
-        {
-            bool isWhiteToMove = board.Us == Piece.WHITE;
-            int[] attackDirections = isWhiteToMove ? new int[]{ NE, NW } : new int[]{ SE, SW };
-            int rank = start / 8;
-            bool onStartingRank = isWhiteToMove ? rank == 1 : rank == 6;
-            bool promotion = isWhiteToMove ? rank == 6 : rank == 1;
-            //Pawns cannot be on the last rank, so we need not check whether they stay on the board
-            bool isPinned = IsPinned(start);
-
-            /*
-            if (!onlyCaptures)
-            {
-                int direction = board.Us == Piece.WHITE ? Directions[N] : Directions[S]; //White moves N, black moves S
-                if (!isPinned || IsMovingAlongRay(direction, start, ourKingSquare))
-                {
-                    for (int n = 1; n <= (onStartingRank ? 2 : 1); n++)
-                    {
-                        var target = start + n * direction;
-                        if (board.board[target] != Piece.NONE)
-                            break;
-                        if (InCheck && !IsRayCheckSquare(target))
-                            continue;
-
-                        if (promotion)
-                        {
-                            moves.Add(new Move(start, target, board).PromoteTo(Piece.QUEEN));
-                            moves.Add(new Move(start, target, board).PromoteTo(Piece.ROOK));
-                            moves.Add(new Move(start, target, board).PromoteTo(Piece.BISHOP));
-                            moves.Add(new Move(start, target, board).PromoteTo(Piece.KNIGHT));
-                        }
-                        else
-                        {
-                            var move = new Move(start, target, board);
-                            if (n == 2) //double pawn move, cannot happen in promotion!
-                            {
-                                move.DoublePawnMove();
-                            }
-                            moves.Add(move);
-                        }
-                    }
-                }
-            }
-            */
-            //Pawn attack moves
-            for(int i = 0; i < attackDirections.Length; i++)
-            {
-                var attackDirection = attackDirections[i];
-                if (isPinned && !IsMovingAlongRay(Directions[attackDirection], start, ourKingSquare))
                     continue;
-
-                if (NumSquaresToEdge[start][attackDirection] > 0)
+                }
+                if (targetSquare / 8 == promotionRank)
                 {
-                    var target = start + Directions[attackDirection];
-                    if (target == board.EnPassentSquare)
-                    {
-                        //TODO Extra care for enPassent legality (eg remove check obstructing pawn through enPassent)
-                        //EnPassent
-                        moves.Add(new Move(start, target, board).EnPassent());
-                    }
-                    else if ((Piece.COLOR_MASK & board.board[target]) == board.Them)
-                    {
-                        if (InCheck && !IsRayCheckSquare(target))
-                            continue;
-
-                        if (promotion)
-                        {
-                            moves.Add(new Move(start, target, board).PromoteTo(Piece.QUEEN));
-                            moves.Add(new Move(start, target, board).PromoteTo(Piece.ROOK));
-                            moves.Add(new Move(start, target, board).PromoteTo(Piece.BISHOP));
-                            moves.Add(new Move(start, target, board).PromoteTo(Piece.KNIGHT));
-                        }
-                        else
-                        {
-                            moves.Add(new Move(start, target, board));
-                        }
-                    }
+                    moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.QUEEN));
+                    moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.ROOK));
+                    moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.BISHOP));
+                    moves.Add(new Move(startSquare, targetSquare, board).PromoteTo(Piece.KNIGHT));
+                }
+                else
+                {
+                    var move = new Move(startSquare, targetSquare, board);
+                    if (targetSquare == board.EnPassentSquare)
+                        move.EnPassent();
+                    moves.Add(move);
                 }
             }
         }
-
         private void AddKnightMoves(IList<Move> moves, int start, bool onlyCaptures)
         {
             if (IsPinned(start))
@@ -324,15 +276,13 @@ namespace Chess
 
         private void AddKingMoves(IList<Move> moves, bool onlyCaptures)
         {
-            for(int i = 0; i < KingMoves[ourKingSquare].Length; i++)
+            //targets are king moves which are not under a attack and not a friendly piece
+            var targets = KingAttackBitboards[ourKingSquare] & ~friendlyPieces & ~opponentAttackMap;
+            while(targets != 0)
             {
-                var target = KingMoves[ourKingSquare][i];
-                var color = board.board[target] & Piece.COLOR_MASK;
-                //Only add the move if the target is not a friendly piece, the target is not attacked and if it is a capture in onlyCaptures mode
-                if(!(color == board.Us) && (opponentAttackMap & (1ul << target)) == 0 && (!onlyCaptures || color == board.Them))
-                {
-                    moves.Add(new Move(ourKingSquare, target, board));
-                }
+                var target = BitOperations.TrailingZeroCount(targets);
+                targets ^= 1ul << target;
+                moves.Add(new Move(ourKingSquare, target, board));
             }
         }
 
@@ -432,6 +382,10 @@ namespace Chess
 
         private void GenerateBitmasks()
         {
+            enemyPieces = board.Us == Piece.WHITE ? board.BlackPawnBitboard | board.BlackPiecesBitboard : board.WhitePawnBitboard | board.WhitePiecesBitboard;
+            friendlyPieces = board.Us == Piece.WHITE ? board.WhitePawnBitboard | board.WhitePiecesBitboard : board.BlackPawnBitboard | board.BlackPiecesBitboard;
+            freeSquares = ~(enemyPieces | friendlyPieces);
+
             GenerateRayAttackMap();
 
             int startDirIndex = 0, endDirIndex = 8;
@@ -525,6 +479,9 @@ namespace Chess
                     InCheck = true;
                 }
             }
+
+            if (!InCheck)
+                rayCheckBitmask = ~0ul; //Every square "blocks the checks"
 
             opponentKingAttackMap = KingAttackBitboards[board.pieceList[board.Them | Piece.KING][0]];
             opponentAttackMap = opponentKingAttackMap | opponentKnightAttackMap | opponentRayAttackMap | opponentPawnAttackMap;

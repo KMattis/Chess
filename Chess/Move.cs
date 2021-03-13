@@ -4,6 +4,8 @@ using System.Text;
 
 namespace Chess
 {
+
+    //TODO: maybe make move a integer (6 bit start, 6 bit target, 5 bits moved piece, 5 bits captured piece, 5 bits promoted, 1 bit casteling, 1 bit enPassent etc.)
     public class Move
     {
         public int Start { get; private set; }
@@ -79,8 +81,8 @@ namespace Chess
 
         public static string SquareToAlgebraicNotation(int square)
         {
-            var files = "abcdefgh";
-            var ranks = "12345678";
+            const string files = "abcdefgh";
+            const string ranks = "12345678";
             int rank = square / 8;
             int file = square % 8;
             return $"{files[file]}{ranks[rank]}";

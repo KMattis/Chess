@@ -67,6 +67,7 @@ namespace Chess.Client
                         if (move != null)
                         {
                             board.SubmitMove(move);
+                            MoveHelper.PrintBitboard(board.WhitePawnBitboard | board.BlackPawnBitboard);
                             Console.WriteLine($"bestmove {move.ToAlgebraicNotation()}"); //Tell UCI the best move
                         }
                         break;

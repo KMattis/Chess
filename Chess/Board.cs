@@ -350,8 +350,8 @@ namespace Chess
                 var pieceType = Piece.ROOK | Us;
                 board[rookStart] = Piece.NONE;
                 board[rookEnd] = pieceType;
-                pieceList[pieceType].Remove(0);
-                pieceList[pieceType].Add(3);
+                pieceList[pieceType].Remove(rookStart);
+                pieceList[pieceType].Add(rookEnd);
                 ZobristKey.PieceMoved(pieceType, rookStart, rookEnd, ref positionKey);
 
                 if (Us == Piece.WHITE)
