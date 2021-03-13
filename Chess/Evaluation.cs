@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Numerics;
 using System.Text;
 
 namespace Chess
@@ -62,14 +63,14 @@ namespace Chess
 
         public static int[] KingPositionTable = //King Safety
         {
-             30,  20,   0,   0,   0,   0,  20,  30,
-              0,   0, -20, -20, -20, -20,   0,   0,
-            -20, -20, -20, -20, -20, -20, -20, -20,
-            -20, -20, -20, -20, -20, -20, -20, -20,
-            -20, -20, -20, -20, -20, -20, -20, -20,
-            -20, -20, -20, -20, -20, -20, -20, -20,
-            -20, -20, -20, -20, -20, -20, -20, -20,
-            -20, -20, -20, -20, -20, -20, -20, -20,
+             30,  20, -10, -30, -30,   0,  20,  30,
+             10,  10, -80, -80, -80, -80,  10,  10,
+            -80, -80, -80, -80, -80, -80, -80, -80,
+            -80, -80, -80, -80, -80, -80, -80, -80,
+            -80, -80, -80, -80, -80, -80, -80, -80,
+            -80, -80, -80, -80, -80, -80, -80, -80,
+            -80, -80, -80, -80, -80, -80, -80, -80,
+            -80, -80, -80, -80, -80, -80, -80, -80,
         };
 
         public static int[] Mirror =
@@ -98,6 +99,10 @@ namespace Chess
         public static int[] PassedPawnBonus = new int[] { 0, 22, 33, 44, 55, 77, 88, 0 }; //Per rank
 
         public static int BishopClosednessPenalty = -1; //-1 per pawn
+
+        public static int PawnShieldBonus = 40;
+
+        public static IDictionary<ulong, int> MaterialDatabase = new Dictionary<ulong, int>(); //TODO: Clear database regularily?
 
         static Evaluation()
         {
@@ -150,6 +155,31 @@ namespace Chess
             }
         }
 
+        private static int ProbeMaterial(Board board)
+        {
+            if (MaterialDatabase.ContainsKey(board.materialKey))
+                return MaterialDatabase[board.materialKey];
+
+            //Basic material counting
+            var score = CountMaterial(board);
+
+            var whitePawnsCount = board.pieceList[Piece.WHITE | Piece.PAWN].Count;
+            var blackPawnsCount = board.pieceList[Piece.BLACK | Piece.PAWN].Count;
+
+            //Bishop pair bonus
+            if (board.pieceList[Piece.WHITE | Piece.BISHOP].Count >= 2)
+                score += BishopPairScore;
+            if (board.pieceList[Piece.BLACK | Piece.BISHOP].Count >= 2)
+                score -= BishopPairScore;
+
+            //Bishop Closedness Penalty
+            score += board.pieceList[Piece.WHITE | Piece.BISHOP].Count * (whitePawnsCount * 2 + blackPawnsCount) * BishopClosednessPenalty;
+            score -= board.pieceList[Piece.BLACK | Piece.BISHOP].Count * (blackPawnsCount * 2 + whitePawnsCount) * BishopClosednessPenalty;
+
+            MaterialDatabase.Add(board.materialKey, score);
+            return score;
+        }
+
         public static int Evaluate(Board board)
         {
             var preference = board.Us == Piece.WHITE ? 1 : -1;
@@ -157,45 +187,23 @@ namespace Chess
             var whitePawns = board.pieceList[Piece.WHITE | Piece.PAWN];
             var blackPawns = board.pieceList[Piece.BLACK | Piece.PAWN];
 
-            ulong whitePawnBitboard = 0;
-            for (int i = 0; i < whitePawns.Count; i++)
-            {
-                whitePawnBitboard |= 1ul << whitePawns[i];
-            }
-            ulong blackPawnBitboard = 0;
-            for (int i = 0; i < blackPawns.Count; i++)
-            {
-                blackPawnBitboard |= 1ul << blackPawns[i];
-            }
-
-            var score = CountMaterial(board);
+            var score = ProbeMaterial(board);
 
             var positionValues = new int[] { 0, 0 };
 
-            foreach(var pieceType in Piece.PIECE_TYPES)
+            for(int pieceTypeIndex = 0; pieceTypeIndex < Piece.PIECE_TYPES.Length; pieceTypeIndex++)
             {
+                var pieceType = Piece.PIECE_TYPES[pieceTypeIndex];
                 var color = Piece.COLOR_MASK & pieceType;
                 var colorBit = color == Piece.WHITE ? 0 : 1;
 
-                foreach(var square in board.pieceList[pieceType])
+                for(int pieceIndex = 0; pieceIndex < board.pieceList[pieceType].Count; pieceIndex++)
                 {
-                    positionValues[colorBit] += PositionTables[pieceType][square];
+                    positionValues[colorBit] += PositionTables[pieceType][board.pieceList[pieceType][pieceIndex]];
                 }
             }
 
             score += positionValues[0] - positionValues[1];
-
-
-            //Bishop pair
-            if (board.pieceList[Piece.WHITE | Piece.BISHOP].Count >= 2)
-                score += BishopPairScore;
-            if (board.pieceList[Piece.BLACK | Piece.BISHOP].Count >= 2)
-                score -= BishopPairScore;
-
-            //Bishop Closedness Penalty
-            score += board.pieceList[Piece.WHITE | Piece.BISHOP].Count * (whitePawns.Count * 2 + blackPawns.Count) * BishopClosednessPenalty;
-            score -= board.pieceList[Piece.BLACK | Piece.BISHOP].Count * (blackPawns.Count * 2 + whitePawns.Count) * BishopClosednessPenalty;
-
 
             //Pawn Scores
             int whitePawnScore = 0;
@@ -205,10 +213,10 @@ namespace Chess
                 var pawnSquare = whitePawns[i];
                 var pawnFile = pawnSquare % 8;
 
-                if ((MoveHelper.IsolatedPawnBitboards[pawnFile] & whitePawnBitboard) == 0)
+                if ((MoveHelper.IsolatedPawnBitboards[pawnFile] & board.WhitePawnBitboard) == 0)
                     //Isolated pawn
                     whitePawnScore += IsolatedPawnBonus;
-                if ((MoveHelper.PassedPawnBitboards[pawnFile] & blackPawnBitboard) == 0)
+                if ((MoveHelper.PassedPawnBitboards[pawnFile] & board.BlackPawnBitboard) == 0)
                     //Passed pawn
                     whitePawnScore += PassedPawnBonus[pawnSquare / 8];
             }
@@ -217,10 +225,10 @@ namespace Chess
                 var pawnSquare = blackPawns[i];
                 var pawnFile = pawnSquare % 8;
 
-                if ((MoveHelper.IsolatedPawnBitboards[pawnFile] & blackPawnBitboard) == 0)
+                if ((MoveHelper.IsolatedPawnBitboards[pawnFile] & board.BlackPawnBitboard) == 0)
                     //Isolated pawn
                     blackPawnScore += IsolatedPawnBonus;
-                if ((MoveHelper.PassedPawnBitboards[pawnFile] & whitePawnBitboard) == 0)
+                if ((MoveHelper.PassedPawnBitboards[pawnFile] & board.WhitePawnBitboard) == 0)
                     //Passed pawn
                     blackPawnScore += PassedPawnBonus[7 - pawnSquare / 8];
             }
@@ -240,8 +248,8 @@ namespace Chess
                 }
                 f0 = rookFile;
                 
-                bool isOpenWhite = (MoveHelper.FileBitboards[rookFile] & whitePawnBitboard) == 0;
-                bool isOpenBlack = (MoveHelper.FileBitboards[rookFile] & blackPawnBitboard) == 0;
+                bool isOpenWhite = (MoveHelper.FileBitboards[rookFile] & board.WhitePawnBitboard) == 0;
+                bool isOpenBlack = (MoveHelper.FileBitboards[rookFile] & board.BlackPawnBitboard) == 0;
 
                 whiteRookPawnScore += RookFileScores[isOpenWhite ? 0 : 1][isOpenBlack ? 0 : 1];
             }
@@ -257,13 +265,24 @@ namespace Chess
                 }
                 f0 = rookFile;
 
-                bool isOpenWhite = (MoveHelper.FileBitboards[rookFile] & whitePawnBitboard) == 0;
-                bool isOpenBlack = (MoveHelper.FileBitboards[rookFile] & blackPawnBitboard) == 0;
+                bool isOpenWhite = (MoveHelper.FileBitboards[rookFile] & board.WhitePawnBitboard) == 0;
+                bool isOpenBlack = (MoveHelper.FileBitboards[rookFile] & board.BlackPawnBitboard) == 0;
 
                 blackRookPawnScore += RookFileScores[isOpenBlack ? 0 : 1][isOpenWhite ? 0 : 1];
             }
 
             score += whiteRookPawnScore - blackRookPawnScore;
+
+            var whiteKingSquare = board.pieceList[Piece.WHITE | Piece.KING][0];
+            var blackKingSquare = board.pieceList[Piece.BLACK | Piece.KING][0];
+
+            var whiteKingOnFlank = whiteKingSquare % 8 <= 2 || whiteKingSquare % 8 >= 6;
+            var blackKingOnFlank = blackKingSquare % 8 <= 2 || blackKingSquare % 8 >= 6;
+
+            var whiteKingPawnShield = whiteKingOnFlank ? BitOperations.PopCount(board.WhitePawnBitboard & MoveHelper.KingAttackBitboards[whiteKingSquare]) : 0;
+            var blackKingPawnShield = blackKingOnFlank ? BitOperations.PopCount(board.BlackPawnBitboard & MoveHelper.KingAttackBitboards[blackKingSquare]) : 0;
+
+            score += (whiteKingPawnShield - blackKingPawnShield) * PawnShieldBonus;
 
             return preference * score;
         }
@@ -271,8 +290,9 @@ namespace Chess
         public static int CountMaterial(Board board)
         {
             var count = 0;
-            foreach(var pieceType in Piece.PIECE_TYPES)
+            for(int pieceTypeIndex = 0; pieceTypeIndex < Piece.PIECE_TYPES.Length; pieceTypeIndex++)
             {
+                var pieceType = Piece.PIECE_TYPES[pieceTypeIndex];
                 count += PieceValues[pieceType] * board.pieceList[pieceType].Count;
             }
             return count;

@@ -51,11 +51,30 @@ namespace Chess
             return this;
         }
 
+        public override bool Equals(object obj)
+        {
+            if (obj == this) return true;
+            if (obj == null) return false;
+            if (obj.GetType() != GetType()) return false;
+            var move = (Move)obj;
+            return move.Start == Start && move.Target == Target;
+        }
+
+        public override int GetHashCode()
+        {
+            return Start * 64 + Target;
+        }
+
         public string ToAlgebraicNotation()
         {
             var promotion = Promotion == Piece.NONE ? "" : Piece.ToFenString(Promotion).ToString().ToLower();
 
             return $"{SquareToAlgebraicNotation(Start)}{SquareToAlgebraicNotation(Target)}{promotion}";
+        }
+
+        public override string ToString()
+        {
+            return ToAlgebraicNotation();
         }
 
         public static string SquareToAlgebraicNotation(int square)

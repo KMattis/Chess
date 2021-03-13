@@ -87,17 +87,45 @@ namespace Chess.Client
         public static Move SearchBestMove()
         {
             var startTime = DateTime.Now;
-            int depth = 5;
+            int depth = 4;
             Move[] lastpv = null;
             int? lastScore = null;
             IDictionary<Move, int> topLevelMoveOrder = null;
-            while (true)
+            while (true) //iterate search depth
             {
                 var currentSearchStartTime = DateTime.Now;
-                int alpha = lastScore.HasValue ? lastScore.Value - 20 : -AI.INFINITY;
-                int beta = lastScore.HasValue ? lastScore.Value + 20 : AI.INFINITY;
+                var lastAspirationWindowRestart = DateTime.Now;
 
-                SearchInfo info = ai.FindBestMove(depth, lastpv, alpha, beta, topLevelMoveOrder);
+                int delta = 17; //TODO: goood value?
+                int alpha = lastScore.HasValue ? lastScore.Value - delta : -AI.INFINITY;
+                int beta = lastScore.HasValue ? lastScore.Value + delta : AI.INFINITY;
+                SearchInfo info;
+
+                int failLowCount = 0;
+                int failHighCount = 0;
+
+                while (true) //Search, if necessary widen aspiration window size
+                {
+                    info = ai.FindBestMove(depth, lastpv, alpha, beta, topLevelMoveOrder, (failLowCount + failHighCount == 0));
+
+                    if (info.Score <= alpha) //Fail low
+                    {
+                        beta = (alpha + beta) / 2;
+                        alpha = info.Score - delta;
+                        failLowCount++;
+                    }
+                    else if (info.Score >= beta) //Fail high
+                    {
+                        beta = info.Score + delta;
+                        failHighCount++;
+                    }
+                    else
+                        break;
+
+                    lastAspirationWindowRestart = DateTime.Now;
+                    delta += delta / 4 + 5;
+                }
+
                 var pvstring = "";
                 foreach (var move in info.PV)
                 {
@@ -105,28 +133,18 @@ namespace Chess.Client
                         break;
                     pvstring += move.ToAlgebraicNotation() + " ";
                 }
-                var nodesPerSecond = (int)(info.Nodes / (DateTime.Now - currentSearchStartTime).TotalSeconds);
 
-                if (info.Score <= alpha || info.Score >= beta)
-                {
-                    
-                    Console.WriteLine($"info score cp {info.Score} pv {pvstring} depth {info.Depth} nodes {info.Nodes} nps {nodesPerSecond}");
-                    currentSearchStartTime = DateTime.Now;
-                    info = ai.FindBestMove(depth, lastpv, -AI.INFINITY, AI.INFINITY, topLevelMoveOrder);
-                    pvstring = "";
-                    foreach (var move in info.PV)
-                    {
-                        if (move == null)
-                            break;
-                        pvstring += move.ToAlgebraicNotation() + " ";
-                    }
-                    nodesPerSecond = (int)(info.Nodes / (DateTime.Now - currentSearchStartTime).TotalSeconds);
-                }
-                
+                var searchTime = DateTime.Now - currentSearchStartTime;
+                var aspirationTime = lastAspirationWindowRestart - currentSearchStartTime;
+
+                int percentage = (int)(100 * aspirationTime.TotalMilliseconds / searchTime.TotalMilliseconds);
+
+                var nodesPerSecond = (int)(info.Nodes / searchTime.TotalSeconds);
+
                 //TODO: Add mating score info
                 Console.WriteLine($"info score cp {info.Score} pv {pvstring} depth {info.Depth} nodes {info.Nodes} nps {nodesPerSecond}");
-                Console.WriteLine($"info string NM {info.NullMoves} NMS {info.NullMovesSuccess} QNodes {info.QNodes} BCutoffs {info.BetaCutoffs} FP {info.FutilityPrunes} TTHits {info.Transpositions}");
-                if (DateTime.Now - startTime > TimeSpan.FromSeconds(10))
+                Console.WriteLine($"info string AWPer {percentage}% FailL {failLowCount} FailH {failHighCount} NM {info.NullMoves} NMS {info.NullMovesSuccess} QNodes {info.QNodes} BCutoffs {info.BetaCutoffs} FP {info.FutilityPrunes} TTHits {info.Transpositions} SR {info.ScoutRemovals} Scouts {info.Scouts} MCPrunes {info.MCPrunes}");
+                if (DateTime.Now - startTime > TimeSpan.FromSeconds(5))
                 {
                     return info.PV[0];
                 }

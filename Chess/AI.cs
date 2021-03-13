@@ -17,9 +17,10 @@ namespace Chess
         public int BetaCutoffs { get; set; }
         public int QNodes { get; set; }
         public int FutilityPrunes { get; set; }
-    
+        public int ScoutRemovals { get; set; }
+        public int Scouts { get; set; }
         public int Transpositions { get; set; }
-
+        public int MCPrunes { get; set; }
         public IDictionary<Move, int> TopLevelMoveOrder { get; set; } = new Dictionary<Move, int>();
     }
 
@@ -47,6 +48,10 @@ namespace Chess
         public const int LookupFailed = int.MinValue;
 
         public const int R = 2;
+
+        public const int MC_M = 6;
+        public const int MC_C = 3;
+        public const int MC_R = 3;
 
         private Board board;
         private MoveGenerator generator;
@@ -83,8 +88,8 @@ namespace Chess
 
         private int MoveImportance(Move move, int depth, IDictionary<Move, int> ordering)
         {
-            if (ordering != null && ordering.ContainsKey(move))
-                return ordering[move];
+            //if (ordering != null)
+            //    return ordering[move];
 
             var pvMove = lastpv == null ? null : searchInfo.Depth - depth >= lastpv.Length ? null : depth < 0 ? null : lastpv[searchInfo.Depth - depth];
             var pvValue = pvMove == null ? 0 : (pvMove.Start == move.Start && pvMove.Target == move.Target) ? 10000000 : 0;
@@ -99,9 +104,13 @@ namespace Chess
             return killerValue + pvValue + captureValue + promotionValue + pawnCapturePenalty;
         }
 
-        public SearchInfo FindBestMove(int depth, Move[] lastpv, int startAlpha, int startBeta, IDictionary<Move, int> lastTopLevelMoveOrder)
+        public SearchInfo FindBestMove(int depth, Move[] lastpv, int startAlpha, int startBeta, IDictionary<Move, int> lastTopLevelMoveOrder, bool resetTranpositionTable)
         {
-            transpositions.Clear();
+            if (resetTranpositionTable)
+            {
+                transpositions.Clear();
+            }
+
             var pv = new Move[depth];
 
             this.lastpv = lastpv;
@@ -113,6 +122,7 @@ namespace Chess
             var score = DeepEval(depth, startAlpha, startBeta, false, pv, lastTopLevelMoveOrder);
             searchInfo.Score = score;
             searchInfo.PV = pv;
+
             return searchInfo;
         }
 
@@ -145,6 +155,117 @@ namespace Chess
             {
                 transpositions[board.positionKey] = new TranspositionEntry { Score = score, Type = type };
             }
+        }
+
+        //ZW search with multicut
+        private int ZWSerach(int depth, int beta, bool cut = true, bool nullMoveAllowed= true)
+        {
+            searchInfo.Nodes++;
+            generator.Setup();
+            var moves = generator.GetMoves(false);
+
+            if (transpositions.ContainsKey(board.positionKey))
+            {
+                searchInfo.Transpositions++;
+                var score = LookupEvaluation(beta-1, beta);
+
+                if (score != LookupFailed)
+                    return score;
+            }
+
+            if (!moves.Any())
+            {
+                //When in Check: Checkmate:
+                if (generator.InCheck)
+                {
+                    return beta - 1;
+                }
+                else //Stalemate
+                {
+                    if (0 >= beta)
+                        return beta;
+                    else
+                        return beta - 1;
+                }
+            }
+            else if (board.states.Any(s => s.positionKey == board.positionKey))
+            {
+                //Repetition
+                if (0 >= beta)
+                    return beta;
+                else
+                    return beta - 1;
+            }
+
+            if (depth <= 0)
+            {
+                return QuiesceneSearch(beta-1, beta);
+            }
+
+
+            if (depth == 1)
+            {
+                //Futility pruning
+                var currentEval = Evaluation.Evaluate(board);
+                if (currentEval + Evaluation.BishopValue < beta-1)
+                {
+                    searchInfo.FutilityPrunes++;
+                    //Prune this node, i.e. go directly to QuiesceneSearch
+                    return QuiesceneSearch(beta-1, beta);
+                }
+            }
+
+            if (nullMoveAllowed && !generator.InCheck && depth >= 1 + R)
+            {
+                searchInfo.NullMoves++;
+                //Null move pruning
+                board.SubmitNullMove();
+                int eval = -ZWSerach(depth - 1 - R, 1-beta, cut, false);
+                board.UndoNullMove();
+                if (eval >= beta)
+                {
+                    searchInfo.NullMovesSuccess++;
+                    return beta;
+                }
+            }
+
+            var orderedMoves = moves.OrderByDescending(m => MoveImportance(m, depth, null)).ToList();
+            var moveIndex = 0;
+
+            if (depth >= MC_R && cut)
+            {
+                int c = 0;
+                for(int m = 0; m < MC_M && moveIndex < orderedMoves.Count; m++)
+                {
+                    board.SubmitMove(orderedMoves[moveIndex]);
+                    int eval = -ZWSerach(depth - 1 - MC_R, 1 - beta, !cut, true);
+                    board.UndoMove();
+                    moveIndex++;
+                    if (eval >= beta)
+                    {
+                        c++;
+                        if (c == MC_C)
+                        {
+                            searchInfo.MCPrunes++;
+                            return beta; // mc-prune
+                        }
+                    }
+                }
+            }
+
+            for (moveIndex = 0; moveIndex < orderedMoves.Count; moveIndex++)
+            {
+                board.SubmitMove(orderedMoves[moveIndex]);
+                int eval = -ZWSerach(depth - 1, 1 - beta, !cut, true);
+                board.UndoMove();
+
+                if (eval >= beta)
+                {
+                    return beta;
+                }
+            }
+
+            return beta - 1;
         }
 
         private int DeepEval(int depth, int alpha, int beta, bool nullMoveAllowed, Move[] pv, IDictionary<Move, int> orderedTopLevelMoves = null)
@@ -217,7 +338,9 @@ namespace Chess
 
             TranspositionEntryType ttType = TranspositionEntryType.UpperBound;
             int movenumber = 1;
-            
+
+            bool searchPV = true;
+
             foreach (var move in moves.OrderByDescending(m => MoveImportance(m, depth, orderedTopLevelMoves)))
             {
                 if (depth == searchInfo.Depth) //Upper level
@@ -227,7 +350,27 @@ namespace Chess
 
                 var npv = new Move[depth-1];
                 board.SubmitMove(move);
-                var eval = -DeepEval(depth - 1, -beta, -alpha, true, npv);
+
+                int eval;
+                if (searchPV)
+                {
+                    eval = -DeepEval(depth - 1, -beta, -alpha, true, npv);
+                }
+                else
+                {
+                    searchInfo.Scouts++;
+                    //Scout zw search
+                    eval = -ZWSerach(depth - 1 , -alpha);
+                    if (eval > alpha)
+                    {
+                        eval = -DeepEval(depth - 1, -beta, -alpha, true, npv); // re-search
+                    }
+                    else
+                    {
+                        searchInfo.ScoutRemovals++;
+                    }
+                }
+
                 board.UndoMove();
 
                 if(depth == searchInfo.Depth)
@@ -251,6 +394,7 @@ namespace Chess
                 else if (eval > alpha)
                 {
                     alpha = eval;
+                    searchPV = false;
                     pv[0] = move;
                     Array.Copy(npv, 0, pv, 1, npv.Length);
                     ttType = TranspositionEntryType.Exact;

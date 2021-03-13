@@ -35,8 +35,9 @@ namespace Chess
 
 
         public static ulong[] FileBitboards = new ulong[8];
+        public static ulong[] RankBitboards = new ulong[8];
         public static ulong[] IsolatedPawnBitboards = new ulong[8];
-        public static ulong[] PassedPawnBitboards = new ulong[8];
+        public static ulong[] PassedPawnBitboards = new ulong[8]; //TODO PassedPawnBitboards are wrong! (they check all ranks, but need only check ranks in front. In fact, we need different ones for each color)
 
         static MoveHelper()
         {
@@ -135,7 +136,8 @@ namespace Chess
             {
                 for(var rank = 0; rank < 8; rank++)
                 {
-                    FileBitboards[file] |= 1ul << (rank*8 + file);
+                    FileBitboards[file] |= 1ul << (rank * 8 + file);
+                    RankBitboards[rank] |= 1ul << (rank * 8 + file);
                 }
             }
 
